@@ -37,7 +37,7 @@ def channel_has_external_users(migrator, channel: str) -> bool:
         # Scan message files for unique user IDs
         for jf in ch_dir.glob("*.json"):
             try:
-                with open(jf) as f:
+                with open(jf, encoding='utf-8') as f:
                     msgs = json.load(f)
                 for m in msgs:
                     if m.get("type") == "message" and "user" in m and m["user"]:
@@ -252,7 +252,7 @@ def add_users_to_space(migrator, space: str, channel: str):
     # First pass: identify all users and their join/leave events
     for jf in sorted(ch_dir.glob("*.json")):
         try:
-            with open(jf) as f:
+            with open(jf, encoding='utf-8') as f:
                 msgs = json.load(f)
             for m in msgs:
                 # Track users who sent messages
@@ -622,7 +622,7 @@ def add_regular_members(migrator, space: str, channel: str):
             channels_file = export_root / "channels.json"
 
             if channels_file.exists():
-                with open(channels_file, "r") as f:
+                with open(channels_file, "r", encoding='utf-8') as f:
                     channels_data = json.load(f)
 
                 for ch in channels_data:

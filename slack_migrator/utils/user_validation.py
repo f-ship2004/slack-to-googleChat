@@ -239,7 +239,7 @@ def analyze_unmapped_users(
             )
             return analysis
 
-        with open(users_file, "r") as f:
+        with open(users_file, "r", encoding='utf-8') as f:
             users_data = json.load(f)
 
         # Create lookup map for user data
@@ -368,7 +368,7 @@ def scan_channel_members_for_unmapped_users(migrator) -> None:
             )
             return
 
-        with open(channels_file, "r") as f:
+        with open(channels_file, "r", encoding='utf-8') as f:
             channels_data = json.load(f)
 
         channels_to_check = []

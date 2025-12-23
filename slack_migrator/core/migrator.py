@@ -246,7 +246,7 @@ class SlackToChatMigrator:
         id_to_name = {}
 
         if f.exists():
-            with open(f) as f_in:
+            with open(f, encoding='utf-8') as f_in:
                 channels = json.load(f_in)
                 name_to_data = {ch["name"]: ch for ch in channels}
                 id_to_name = {ch["id"]: ch["name"] for ch in channels}
@@ -479,7 +479,7 @@ class SlackToChatMigrator:
             users_file = Path(self.export_root) / "users.json"
             if users_file.exists():
                 try:
-                    with open(users_file, "r") as f:
+                    with open(users_file, "r", encoding='utf-8') as f:
                         users_list = json.load(f)
                     self._users_data = {user["id"]: user for user in users_list}
                 except Exception as e:
@@ -517,7 +517,7 @@ class SlackToChatMigrator:
 
             users_file = Path(self.export_root) / "users.json"
             if users_file.exists():
-                with open(users_file, "r") as f:
+                with open(users_file, "r", encoding='utf-8') as f:
                     users_data = json.load(f)
                     user_info = next(
                         (u for u in users_data if u.get("id") == user_id), None
@@ -890,7 +890,7 @@ class SlackToChatMigrator:
                 msgs = []
                 for jf in sorted(ch_dir.glob("*.json")):
                     try:
-                        with open(jf) as f:
+                        with open(jf, encoding='utf-8') as f:
                             msgs.extend(json.load(f))
                     except Exception as e:
                         log_with_context(

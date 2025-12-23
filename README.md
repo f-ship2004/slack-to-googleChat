@@ -659,3 +659,8 @@ If you prefer not to use the setup script, follow these steps manually:
 ### License
 
 MIT
+
+
+
+ .\venv\Scripts\activate
+ python -m slack_migrator --creds_path .\slack-chat-migrator-sa-key.json --export_path .\slack_chanel_data --workspace_admin admin@company.com --skip_permission_check --verbose

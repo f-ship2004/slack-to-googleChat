@@ -1,0 +1,13 @@
+# Minimal configuration for permission testing
+# This is only used for testing Google Cloud permissions
+
+exclude_channels: []
+include_channels: []
+user_mapping_overrides: {}
+email_domain_override: ""
+abort_on_error: false
+max_failure_percentage: 10
+import_completion_strategy: "skip_on_error"
+cleanup_on_error: false
+max_retries: 3
+retry_delay: 2

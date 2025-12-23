@@ -33,7 +33,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 
     if config_path.exists():
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding='utf-8') as f:
                 loaded_config = yaml.safe_load(f)
                 # Handle None result from empty file
                 if loaded_config is not None:
@@ -114,7 +114,7 @@ def create_default_config(output_path: Path) -> bool:
     }
 
     try:
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding='utf-8') as f:
             yaml.safe_dump(default_config, f, default_flow_style=False)
         log_with_context(logging.INFO, f"Created default config file at {output_path}")
         return True
