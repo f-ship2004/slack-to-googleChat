@@ -3,7 +3,9 @@ Folder management for Google Drive integration.
 """
 
 import logging
+import concurrent.futures
 from typing import Optional
+from tqdm import tqdm
 
 from slack_migrator.utils.logging import (
     log_with_context,
@@ -18,6 +20,8 @@ class FolderManager:
         drive_service,
         workspace_domain: Optional[str] = None,
         dry_run: bool = False,
+        migrator=None,
+        use_migrator_fallback: bool = True,
     ):
         """Initialize the FolderManager.
 
@@ -25,11 +29,22 @@ class FolderManager:
             drive_service: Google Drive API service instance
             workspace_domain: The workspace domain for permissions
             dry_run: Whether to run in dry run mode
+            migrator: Optional migrator instance for thread-safe API access
+            use_migrator_fallback: Whether to use the thread-safe fallback from migrator
         """
-        self.drive_service = drive_service
+        self._drive_service = drive_service
+        self.migrator = migrator
         self.workspace_domain = workspace_domain
         self.dry_run = dry_run
+        self.use_migrator_fallback = use_migrator_fallback
         self.folder_cache = {}
+
+    @property
+    def drive_service(self):
+        """Get the drive service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "drive"):
+            return self.migrator.drive
+        return self._drive_service
 
     def create_root_folder_in_shared_drive(
         self, folder_name: str, shared_drive_id: str
@@ -414,8 +429,7 @@ class FolderManager:
 
         This method replaces any existing user permissions with the new set.
         All channel members get reader access to the folder.
-        Files within the folder will inherit these permissions, so we don't need to set
-        individual permissions for each file except for giving the poster editor access.
+        Files within the folder will inherit these permissions.
 
         Args:
             folder_id: ID of the channel folder
@@ -424,7 +438,7 @@ class FolderManager:
             shared_drive_id: ID of the shared drive (if applicable)
 
         Returns:
-            True if permissions were set successfully, False otherwise
+            True if all permissions were set successfully, False otherwise
         """
         if self.dry_run:
             log_with_context(
@@ -435,11 +449,10 @@ class FolderManager:
             )
             return True
 
-        # Add permissions for all users
-        success_count = 0
-        failed_count = 0
-
-        for email in user_emails:
+        # Use a threading lock for thread-safe counter updates if we were using a class attribute,
+        # but here we just collect results.
+        
+        def _set_single_permission(email):
             try:
                 permission = {"type": "user", "role": "reader", "emailAddress": email}
                 if shared_drive_id:
@@ -453,18 +466,54 @@ class FolderManager:
                     self.drive_service.permissions().create(
                         fileId=folder_id, body=permission, sendNotificationEmail=False
                     ).execute()
-
-                success_count += 1
-
+                return True, email, None
             except Exception as e:
-                log_with_context(
-                    logging.WARNING,
-                    f"Failed to grant access to {email} for channel folder {channel}: {e}",
-                    channel=channel,
-                    folder_id=folder_id,
-                    user_email=email,
-                )
-                failed_count += 1
+                return False, email, e
+
+        # Limit concurrency to avoid Drive API rate limits (10 is usually safe)
+        max_workers = 10
+        success_count = 0
+        failed_count = 0
+
+        pbar = tqdm(total=len(user_emails), desc=f"Granting Drive access for {channel}", unit="user")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_email = {executor.submit(_set_single_permission, email): email for email in user_emails}
+            
+            for future in concurrent.futures.as_completed(future_to_email):
+                success, email, e = future.result()
+                pbar.update(1)
+                
+                if success:
+                    success_count += 1
+                else:
+                    error_str = str(e).lower()
+                    # Handle specific non-critical permission errors
+                    if "invitingsubjectwithoutgoogleaccount" in error_str or "invalidsharingrequest" in error_str:
+                         log_with_context(
+                            logging.INFO,
+                            f"Skipping Drive permission for {email}: User does not have a Google account.",
+                            channel=channel,
+                            user_email=email,
+                        )
+                    elif "teamdrivedomainusersonlyrestriction" in error_str:
+                        log_with_context(
+                            logging.INFO,
+                            f"Skipping Drive permission for {email}: Shared Drive restriction prevents external sharing.",
+                            channel=channel,
+                            user_email=email,
+                        )
+                    else:
+                        log_with_context(
+                            logging.WARNING,
+                            f"Failed to grant access to {email} for channel folder {channel}: {e}",
+                            channel=channel,
+                            folder_id=folder_id,
+                            user_email=email,
+                        )
+                        failed_count += 1
+        
+        pbar.close()
 
         log_with_context(
             logging.INFO,

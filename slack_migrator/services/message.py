@@ -5,6 +5,7 @@ Functions for handling message processing during Slack to Google Chat migration
 import datetime
 import hashlib
 import logging
+import threading
 import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -948,16 +949,17 @@ def track_message_stats(migrator, m):
     # Check if we're in update mode
     is_update_mode = getattr(migrator, "update_mode", False)
 
-    # Initialize channel stats if not already done
-    if not hasattr(migrator, "channel_stats"):
-        migrator.channel_stats = {}
+    # Initialize channel stats if not already done (thread-safe)
+    with getattr(migrator, "lock", threading.Lock()):
+        if not hasattr(migrator, "channel_stats"):
+            migrator.channel_stats = {}
 
-    if channel not in migrator.channel_stats:
-        migrator.channel_stats[channel] = {
-            "message_count": 0,
-            "reaction_count": 0,
-            "file_count": 0,
-        }
+        if channel not in migrator.channel_stats:
+            migrator.channel_stats[channel] = {
+                "message_count": 0,
+                "reaction_count": 0,
+                "file_count": 0,
+            }
 
     # In update mode, we might need to skip stats tracking for messages
     # that have already been processed

@@ -6,7 +6,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # Configuration
-CREDS_PATH = r"c:\Users\覃惟剛\Desktop\slack-chat-migrator\slack-to-gchat-migration-eefc572d7e9d.json"
+CREDS_PATH = "/Users/shinigo/Desktop/slack-chat-migrator/slack-to-gchat-migration-eefc572d7e9d.json"
 WORKSPACE_ADMIN = "igo.shin@f-ship.jp"
 SPACE_ID = "spaces/AAQA6CIcvrk"
 

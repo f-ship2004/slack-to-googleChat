@@ -99,7 +99,7 @@ def discover_existing_spaces(migrator):
                 break
 
             # Add a small delay to avoid rate limiting
-            time.sleep(0.2)
+            time.sleep(0.05)  # Optimized from 0.2 to 0.05
 
         # Now process the collected spaces and identify duplicates
         for channel_name, spaces in all_spaces_by_channel.items():

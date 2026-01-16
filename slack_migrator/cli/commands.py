@@ -44,6 +44,10 @@ class MigrationOrchestrator:
             debug_api=self.args.debug_api,
         )
 
+        # Update config with CLI max_workers if provided
+        if self.args.max_workers:
+            migrator.config["max_workers"] = self.args.max_workers
+
         # Set output directory if we have one
         if self.output_dir:
             migrator.output_dir = self.output_dir
@@ -142,6 +146,13 @@ class MigrationOrchestrator:
             logging.INFO, "2. Add them to user_mapping_overrides in your config.yaml"
         )
 
+        if self.args.force_migration:
+            log_with_context(
+                logging.WARNING,
+                "Force migration enabled - proceeding automatically despite validation issues.",
+            )
+            return True
+
         if is_explicit_dry_run:
             log_with_context(
                 logging.INFO, "3. Run the migration again (without --dry_run)"
@@ -154,6 +165,13 @@ class MigrationOrchestrator:
 
             # Ask user if they want to proceed anyway
             try:
+                if self.args.force_migration:
+                    log_with_context(
+                        logging.WARNING,
+                        "Force migration enabled - proceeding with unmapped users automatically.",
+                    )
+                    return True
+
                 response = (
                     input(
                         "⚠️  Proceed anyway despite unmapped users? (NOT RECOMMENDED) (y/N): "
@@ -260,12 +278,13 @@ class MigrationOrchestrator:
                     if self.report_validation_issues(
                         self.migrator, is_explicit_dry_run=True
                     ):
-                        # User should not be able to proceed in explicit dry run mode
-                        log_with_context(
-                            logging.INFO,
-                            "Use normal migration mode to proceed with unmapped users.",
-                        )
-                        sys.exit(1)
+                        if not self.args.force_migration:
+                            # User should not be able to proceed in explicit dry run mode
+                            log_with_context(
+                                logging.INFO,
+                                "Use normal migration mode to proceed with unmapped users.",
+                            )
+                            sys.exit(1)
                     else:
                         sys.exit(1)
                 else:
@@ -381,6 +400,16 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         "--skip_permission_check",
         action="store_true",
         help="Skip permission checks (not recommended)",
+    )
+    parser.add_argument(
+        "--force-migration",
+        action="store_true",
+        help="Force migration even if validation issues are found (e.g. unmapped users)",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        help="Maximum number of concurrent worker threads for channel processing",
     )
     return parser
 

@@ -1,0 +1,13 @@
+.\venv\Scripts\activate
+slack-migrator --creds_path .\slack-chat-migrator-sa-key.json --export_path .\slack_chanel_data --workspace_admin igo.shin@f-ship.jp --skip_permission_check --verbose
+
+
+source venv/bin/activate 
+slack-migrator --creds_path ./slack-chat-migrator-sa-key.json --export_path ./slack_chanel_data --workspace_admin igo.shin@f-ship.jp --skip_permission_check --verbose
+
+
+venv/bin/python -m slack_migrator \
+  --creds_path slack-to-gchat-migration-eefc572d7e9d.json \
+  --export_path slack_chanel_data \
+  --workspace_admin igo.shin@f-ship.jp \
+  --max-workers 2

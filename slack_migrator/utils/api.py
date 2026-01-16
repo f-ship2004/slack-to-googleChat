@@ -5,6 +5,7 @@ API utilities for the Slack to Google Chat migration tool
 import functools
 import inspect
 import logging
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -23,8 +24,15 @@ REQUIRED_SCOPES = [
     "https://www.googleapis.com/auth/drive",  # Full Drive scope covers all drive.file permissions plus shared drives
 ]
 
-# Cache for service instances
-_service_cache: Dict[str, Any] = {}
+import threading
+# Cache for service instances - use thread-local storage to avoid cross-thread corruption
+_service_cache_local = threading.local()
+
+def _get_service_cache() -> Dict[str, Any]:
+    """Get the thread-local service cache."""
+    if not hasattr(_service_cache_local, "cache"):
+        _service_cache_local.cache = {}
+    return _service_cache_local.cache
 
 
 class RetryWrapper:
@@ -405,16 +413,18 @@ def get_gcp_service(
     version: str,
     channel: Optional[str] = None,
     retry_config: Optional[Dict[str, Any]] = None,
+    use_cache: bool = True,
 ) -> Any:
     """Get a Google API client service using service account impersonation."""
     cache_key = f"{creds_path}:{user_email}:{api}:{version}"
-    if cache_key in _service_cache:
+    cache = _get_service_cache()
+    if use_cache and cache_key in cache:
         log_with_context(
             logging.DEBUG,
             f"Using cached service for {api} as {user_email}",
             channel=channel,
         )
-        return _service_cache[cache_key]
+        return cache[cache_key]
 
     try:
         log_with_context(
@@ -482,7 +492,8 @@ def get_gcp_service(
 
         wrapped_service = RetryWrapper(service, get_channel_context, retry_config)
 
-        _service_cache[cache_key] = wrapped_service
+        if use_cache:
+            cache[cache_key] = wrapped_service
         return wrapped_service
     except Exception as e:
         log_with_context(

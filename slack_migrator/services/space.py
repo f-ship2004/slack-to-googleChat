@@ -2,9 +2,11 @@
 Functions for managing Google Chat spaces during Slack migration
 """
 
+import concurrent.futures
 import datetime
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, Set
 
@@ -131,20 +133,30 @@ def create_space(migrator, channel: str) -> str:
 
     # Check if this channel has external users that need access
     has_external_users = channel_has_external_users(migrator, channel)
+    allow_external_access = migrator.config.get("allow_external_access", False)
+
     if has_external_users:
-        body["externalUserAllowed"] = True
-        log_with_context(
-            logging.INFO,
-            f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for channel {channel}",
-            channel=channel,
-        )
+        if allow_external_access:
+            body["externalUserAllowed"] = True
+            log_with_context(
+                logging.INFO,
+                f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for channel {channel}",
+                channel=channel,
+            )
+        else:
+            log_with_context(
+                logging.WARNING,
+                f"Channel {channel} has external users but external access is disabled in config. External users will be skipped.",
+                channel=channel,
+            )
 
     # Store space name (either real or generated)
     space_name = None
 
     if migrator.dry_run:
         # In dry run mode, increment the counter but don't make API call
-        migrator.migration_summary["spaces_created"] += 1
+        with getattr(migrator, "lock", threading.Lock()):
+            migrator.migration_summary["spaces_created"] += 1
         # Use a consistent space name format for tracking
         space_name = f"spaces/{channel}"
         log_with_context(
@@ -158,8 +170,9 @@ def create_space(migrator, channel: str) -> str:
             space = migrator.chat.spaces().create(body=body).execute()
             space_name = space["name"]
 
-            # Increment the spaces created counter
-            migrator.migration_summary["spaces_created"] += 1
+            # Increment the spaces created counter (thread-safe)
+            with getattr(migrator, "lock", threading.Lock()):
+                migrator.migration_summary["spaces_created"] += 1
 
             log_with_context(
                 logging.INFO,
@@ -226,10 +239,11 @@ def create_space(migrator, channel: str) -> str:
     # Store the created space in the migrator
     migrator.created_spaces[channel] = space_name
 
-    # Store whether this space has external users for later reference
-    if not hasattr(migrator, "spaces_with_external_users"):
-        migrator.spaces_with_external_users = {}
-    migrator.spaces_with_external_users[space_name] = has_external_users
+    # Store whether this space has external users for later reference (thread-safe)
+    with getattr(migrator, "lock", threading.Lock()):
+        if not hasattr(migrator, "spaces_with_external_users"):
+            migrator.spaces_with_external_users = {}
+        migrator.spaces_with_external_users[space_name] = has_external_users
 
     return space_name
 
@@ -484,6 +498,42 @@ def add_users_to_space(migrator, space: str, channel: str):
         if not membership["leave_time"]:
             membership["leave_time"] = historical_delete_time
 
+        # CRITICAL FIX: Ensure join_time is NOT earlier than space creation time
+        # Google Chat API throws 400 error if membership createTime < space createTime
+        if channel_creation_time and membership["join_time"]:
+            try:
+                # Convert both to datetime objects for comparison
+                join_ts = membership["join_time"]
+                if join_ts.endswith("Z"):
+                    join_ts = join_ts[:-1] + "+00:00"
+                join_dt = datetime.datetime.fromisoformat(join_ts)
+
+                create_ts = channel_creation_time
+                if create_ts.endswith("Z"):
+                    create_ts = create_ts[:-1] + "+00:00"
+                create_dt = datetime.datetime.fromisoformat(create_ts)
+
+                # Clamp join time if it's earlier than creation time
+                if join_dt < create_dt:
+                    # Set it to 1 second after creation time to be safe
+                    safe_join_dt = create_dt + datetime.timedelta(seconds=1)
+                    new_join_time = safe_join_dt.isoformat().replace("+00:00", "Z")
+
+                    log_with_context(
+                        logging.DEBUG,
+                        f"Clamped join time for user {user_id} from {membership['join_time']} to {new_join_time} (must be >= space creation: {channel_creation_time})",
+                        user_id=user_id,
+                        channel=channel,
+                    )
+                    membership["join_time"] = new_join_time
+            except ValueError as e:
+                log_with_context(
+                    logging.WARNING,
+                    f"Failed to compare/clamp timestamps for user {user_id}: {e}",
+                    user_id=user_id,
+                    channel=channel,
+                )
+
     # Add each user to the space as historical membership
     added_count = 0
     failed_count = 0
@@ -507,6 +557,17 @@ def add_users_to_space(migrator, space: str, channel: str):
 
         # Track external users for message attribution
         if migrator._is_external_user(user_email):
+            allow_external_access = migrator.config.get("allow_external_access", False)
+            if not allow_external_access:
+                log_with_context(
+                    logging.WARNING,
+                    f"Skipping external user {user_id} ({user_email}) because allow_external_access is disabled",
+                    user_id=user_id,
+                    user_email=user_email,
+                    channel=channel,
+                )
+                continue
+
             log_with_context(
                 logging.INFO,
                 f"Adding external user {user_id} with internal email {internal_email} as historical member",
@@ -669,45 +730,59 @@ def add_regular_members(migrator, space: str, channel: str):
         if user_email:
             # Get the internal email for proper handling
             internal_email = migrator._get_internal_email(user_id, user_email)
-            if internal_email and internal_email not in active_user_emails:
-                active_user_emails.append(internal_email)
 
             # Track if we have external users
             if migrator._is_external_user(user_email):
                 has_external_users = True
+            
+            # If external access is disabled, don't add external users to Drive permission list
+            allow_external_access = migrator.config.get("allow_external_access", False)
+            if migrator._is_external_user(user_email) and not allow_external_access:
+                continue
+                
+            if internal_email and internal_email not in active_user_emails:
+                active_user_emails.append(internal_email)
 
     # If we have external users, ensure the space has externalUserAllowed=True
     if has_external_users:
-        log_with_context(
-            logging.INFO,
-            f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for space {space} before adding members",
-            channel=channel,
-        )
+        allow_external_access = migrator.config.get("allow_external_access", False)
+        if allow_external_access:
+            log_with_context(
+                logging.INFO,
+                f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for space {space} before adding members",
+                channel=channel,
+            )
 
-        if not migrator.dry_run:
-            try:
-                # Get current space settings
-                space_info = migrator.chat.spaces().get(name=space).execute()
-                external_users_allowed = space_info.get("externalUserAllowed", False)
+            if not migrator.dry_run:
+                try:
+                    # Get current space settings
+                    space_info = migrator.chat.spaces().get(name=space).execute()
+                    external_users_allowed = space_info.get("externalUserAllowed", False)
 
-                # If external users are not allowed, update the space
-                if not external_users_allowed:
-                    update_body = {"externalUserAllowed": True}
-                    update_mask = "externalUserAllowed"
-                    migrator.chat.spaces().patch(
-                        name=space, updateMask=update_mask, body=update_body
-                    ).execute()
+                    # If external users are not allowed, update the space
+                    if not external_users_allowed:
+                        update_body = {"externalUserAllowed": True}
+                        update_mask = "externalUserAllowed"
+                        migrator.chat.spaces().patch(
+                            name=space, updateMask=update_mask, body=update_body
+                        ).execute()
+                        log_with_context(
+                            logging.INFO,
+                            f"Successfully enabled external user access for space {space}",
+                            channel=channel,
+                        )
+                except Exception as e:
                     log_with_context(
-                        logging.INFO,
-                        f"Successfully enabled external user access for space {space}",
+                        logging.WARNING,
+                        f"Failed to enable external user access for space {space}: {e}",
                         channel=channel,
                     )
-            except Exception as e:
-                log_with_context(
-                    logging.WARNING,
-                    f"Failed to enable external user access for space {space}: {e}",
-                    channel=channel,
-                )
+        else:
+            log_with_context(
+                logging.WARNING,
+                f"Space {space} has external users but allow_external_access is disabled. External users will be skipped.",
+                channel=channel,
+            )
 
     # In dry run mode, just log and return
     if migrator.dry_run:
@@ -738,6 +813,17 @@ def add_regular_members(migrator, space: str, channel: str):
 
         # Track external users for message attribution
         if migrator._is_external_user(user_email):
+            allow_external_access = migrator.config.get("allow_external_access", False)
+            if not allow_external_access:
+                log_with_context(
+                    logging.WARNING,
+                    f"Skipping external user {user_id} ({user_email}) because allow_external_access is disabled",
+                    user_id=user_id,
+                    user_email=user_email,
+                    channel=channel,
+                )
+                continue
+
             log_with_context(
                 logging.INFO,
                 f"Adding external user {user_id} with email {user_email} as regular member",
@@ -795,7 +881,7 @@ def add_regular_members(migrator, space: str, channel: str):
                 # Bad request means there's an issue with the format according to API requirements
                 log_with_context(
                     logging.ERROR,
-                    f"Bad request (400) when adding user {internal_email} - check API documentation for correct format",
+                    f"Bad request (400) when adding user {internal_email}. This user might not exist in the Workspace or domain restrictions prevent addition.",
                     error_message=str(e),
                     channel=channel,
                 )

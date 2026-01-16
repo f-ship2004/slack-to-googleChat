@@ -14,17 +14,35 @@ from slack_migrator.utils.logging import (
 class SharedDriveManager:
     """Manages Google Drive shared drives for the migration process."""
 
-    def __init__(self, drive_service, config: dict, dry_run: bool = False):
+    def __init__(
+        self,
+        drive_service,
+        config: dict,
+        dry_run: bool = False,
+        migrator=None,
+        use_migrator_fallback: bool = True,
+    ):
         """Initialize the SharedDriveManager.
 
         Args:
             drive_service: Google Drive API service instance
             config: Configuration dictionary
             dry_run: Whether to run in dry run mode
+            migrator: Optional migrator instance for thread-safe API access
+            use_migrator_fallback: Whether to use the thread-safe fallback from migrator
         """
-        self.drive_service = drive_service
+        self._drive_service = drive_service
         self.config = config
         self.dry_run = dry_run
+        self.migrator = migrator
+        self.use_migrator_fallback = use_migrator_fallback
+
+    @property
+    def drive_service(self):
+        """Get the drive service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "drive"):
+            return self.migrator.drive
+        return self._drive_service
 
     def validate_shared_drive(self, shared_drive_id: str) -> bool:
         """Validate that a shared drive exists and is accessible.

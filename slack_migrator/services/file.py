@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import tempfile
+import threading
 from typing import Any, Dict, Optional
 
 import requests
@@ -38,6 +39,7 @@ class FileHandler:
         folder_id: str,
         migrator,
         dry_run: bool = False,
+        use_migrator_fallback: bool = True,
     ):
         """Initialize the FileHandler.
 
@@ -48,10 +50,15 @@ class FileHandler:
             migrator: The parent Migrator instance
             dry_run: Whether to run in dry run mode
         """
-        self.drive_service = drive_service
-        self.chat_service = chat_service
+        self._drive_service = drive_service
+        self._chat_service = chat_service
         self.migrator = migrator
         self.dry_run = dry_run
+        self.use_migrator_fallback = use_migrator_fallback
+
+        # Thread safety locks
+        self._lock = threading.Lock()
+        self._stats_lock = threading.Lock()
 
         # Initialize the dictionary to track processed files
         self.processed_files = {}
@@ -76,10 +83,10 @@ class FileHandler:
 
         # Initialize modular services
         self.shared_drive_manager = SharedDriveManager(
-            drive_service, migrator.config, dry_run=dry_run
+            drive_service, migrator.config, dry_run=dry_run, migrator=migrator
         )
         self.folder_manager = FolderManager(
-            drive_service, workspace_domain, dry_run=dry_run
+            drive_service, workspace_domain, dry_run=dry_run, migrator=migrator
         )
         self.drive_uploader = DriveFileUploader(
             drive_service, workspace_domain, dry_run=dry_run
@@ -108,6 +115,20 @@ class FileHandler:
                 "FileHandler initialized with verbose logging",
                 channel=self._get_current_channel(),
             )
+
+    @property
+    def drive_service(self):
+        """Get the drive service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "drive"):
+            return self.migrator.drive
+        return self._drive_service
+
+    @property
+    def chat_service(self):
+        """Get the chat service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "chat"):
+            return self.migrator.chat
+        return self._chat_service
 
     def ensure_drive_initialized(self):
         """Ensure drive structures are initialized. Call this after permission validation."""
@@ -352,12 +373,13 @@ class FileHandler:
             mime_type = file_obj.get("mimetype", "application/octet-stream")
             size = file_obj.get("size", 0)
 
-            # Update statistics
-            self.file_stats["total_files"] += 1
-            if channel:
-                if channel not in self.file_stats["files_by_channel"]:
-                    self.file_stats["files_by_channel"][channel] = 0
-                self.file_stats["files_by_channel"][channel] += 1
+            # Update statistics (thread-safe)
+            with self._stats_lock:
+                self.file_stats["total_files"] += 1
+                if channel:
+                    if channel not in self.file_stats["files_by_channel"]:
+                        self.file_stats["files_by_channel"][channel] = 0
+                    self.file_stats["files_by_channel"][channel] += 1
 
             # Check if user is external (if we have user info)
             username = file_obj.get("user", None)
@@ -367,7 +389,8 @@ class FileHandler:
                 and hasattr(self.migrator, "is_external_user")
             ):
                 if self.migrator.is_external_user(username):
-                    self.file_stats["external_user_files"] += 1
+                    with self._stats_lock:
+                        self.file_stats["external_user_files"] += 1
 
             log_with_context(
                 logging.DEBUG,
@@ -376,16 +399,17 @@ class FileHandler:
                 file_id=file_id,
             )
 
-            # Check if we've already processed this file
-            if file_id in self.processed_files:
-                cached_result = self.processed_files[file_id]
-                log_with_context(
-                    logging.DEBUG,
-                    f"File {name} already processed, using cached result",
-                    channel=channel,
-                    file_id=file_id,
-                )
-                return cached_result
+            # Check if we've already processed this file (thread-safe)
+            with self._lock:
+                if file_id in self.processed_files:
+                    cached_result = self.processed_files[file_id]
+                    log_with_context(
+                        logging.DEBUG,
+                        f"File {name} already processed, using cached result",
+                        channel=channel,
+                        file_id=file_id,
+                    )
+                    return cached_result
 
             # Download the file content
             file_content = self._download_file(file_obj)
@@ -477,9 +501,11 @@ class FileHandler:
                     file_obj, file_content, channel, space, user_service, sender_email
                 )
                 if direct_result:
-                    # Store result for future reference and update stats
-                    self.processed_files[file_id] = direct_result
-                    self.file_stats["direct_uploads"] += 1
+                    # Store result for future reference and update stats (thread-safe)
+                    with self._lock:
+                        self.processed_files[file_id] = direct_result
+                    with self._stats_lock:
+                        self.file_stats["direct_uploads"] += 1
                     return direct_result
                 else:
                     log_with_context(
@@ -520,9 +546,11 @@ class FileHandler:
                 file_obj, file_content, channel, sender_email
             )
             if drive_result:
-                # Store result for future reference and update stats
-                self.processed_files[file_id] = drive_result
-                self.file_stats["drive_uploads"] += 1
+                # Store result for future reference and update stats (thread-safe)
+                with self._lock:
+                    self.processed_files[file_id] = drive_result
+                with self._stats_lock:
+                    self.file_stats["drive_uploads"] += 1
 
                 log_with_context(
                     logging.DEBUG,
@@ -626,8 +654,9 @@ class FileHandler:
                 # Use user-specific service if provided, otherwise use default chat uploader
                 if user_service:
                     # Create a temporary chat uploader with the user's service
+                    # Disable migrator fallback to ensure it uses the provided user_service
                     user_chat_uploader = ChatFileUploader(
-                        user_service, dry_run=self.dry_run
+                        user_service, dry_run=self.dry_run, use_migrator_fallback=False
                     )
                     # Set migrator reference for channel context logging
                     user_chat_uploader.migrator = self.migrator

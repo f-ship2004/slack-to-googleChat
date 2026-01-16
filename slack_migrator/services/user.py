@@ -38,7 +38,7 @@ def generate_user_map(
         sys.exit(1)
 
     try:
-        with users_file.open() as f:
+        with users_file.open(encoding='utf-8') as f:
             users = json.load(f)
     except json.JSONDecodeError:
         log_with_context(logging.ERROR, "Failed to parse users.json")

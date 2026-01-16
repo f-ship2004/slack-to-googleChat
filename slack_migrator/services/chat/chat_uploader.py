@@ -18,16 +18,25 @@ from slack_migrator.utils.logging import (
 class ChatFileUploader:
     """Handles direct file uploads to Google Chat API."""
 
-    def __init__(self, chat_service, dry_run: bool = False):
+    def __init__(self, chat_service, dry_run: bool = False, use_migrator_fallback: bool = True):
         """Initialize the ChatFileUploader.
 
         Args:
             chat_service: Google Chat API service instance
             dry_run: Whether to run in dry run mode
+            use_migrator_fallback: Whether to use the thread-safe fallback from migrator
         """
-        self.chat_service = chat_service
+        self._chat_service = chat_service
         self.dry_run = dry_run
+        self.use_migrator_fallback = use_migrator_fallback
         self.migrator = None  # Will be set by the migrator when this service is used
+
+    @property
+    def chat_service(self):
+        """Get the chat service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "chat"):
+            return self.migrator.chat
+        return self._chat_service
 
     def _get_current_channel(self):
         """Helper method to get the current channel from the migrator.

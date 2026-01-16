@@ -25,6 +25,7 @@ class DriveFileUploader:
         workspace_domain: Optional[str] = None,
         dry_run: bool = False,
         service_account_email: Optional[str] = None,
+        use_migrator_fallback: bool = True,
     ):
         """Initialize the DriveFileUploader.
 
@@ -33,14 +34,23 @@ class DriveFileUploader:
             workspace_domain: The workspace domain for permissions
             dry_run: Whether to run in dry run mode
             service_account_email: The email of the service account to grant access to
+            use_migrator_fallback: Whether to use the thread-safe fallback from migrator
         """
-        self.drive_service = drive_service
+        self._drive_service = drive_service
         self.workspace_domain = workspace_domain
         self.dry_run = dry_run
         self.service_account_email = service_account_email
+        self.use_migrator_fallback = use_migrator_fallback
         self.file_hash_cache = {}
         self.folders_pre_cached = set()
         self.migrator = None  # Will be set by the FileHandler when it's created
+
+    @property
+    def drive_service(self):
+        """Get the drive service, preferring the thread-safe one from migrator if allowed."""
+        if self.use_migrator_fallback and self.migrator and hasattr(self.migrator, "drive"):
+            return self.migrator.drive
+        return self._drive_service
 
     def _get_current_channel(self):
         """Helper method to get the current channel from the migrator.

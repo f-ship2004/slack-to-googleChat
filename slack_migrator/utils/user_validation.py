@@ -3,6 +3,7 @@ Simple unmapped user tracking integrated into existing user mapping logic.
 """
 
 import logging
+import threading
 from collections import defaultdict
 from typing import Any, Dict, Set
 
@@ -17,6 +18,7 @@ class UnmappedUserTracker:
         self.user_contexts: Dict[str, Set[str]] = defaultdict(
             set
         )  # Track where they were encountered
+        self._lock = threading.Lock()
 
     def add_unmapped_user(self, user_id: str, context: str = ""):
         """Add an unmapped user to the tracker.
@@ -25,9 +27,10 @@ class UnmappedUserTracker:
             user_id: The unmapped Slack user ID
             context: Optional context about where this user was encountered
         """
-        self.unmapped_users.add(user_id)
-        if context:
-            self.user_contexts[user_id].add(context)
+        with self._lock:
+            self.unmapped_users.add(user_id)
+            if context:
+                self.user_contexts[user_id].add(context)
 
     def track_unmapped_mention(
         self, user_id: str, channel: str = "", message_ts: str = "", text: str = ""
@@ -62,15 +65,18 @@ class UnmappedUserTracker:
 
     def has_unmapped_users(self) -> bool:
         """Check if any unmapped users were found."""
-        return len(self.unmapped_users) > 0
+        with self._lock:
+            return len(self.unmapped_users) > 0
 
     def get_unmapped_count(self) -> int:
         """Get the count of unmapped users."""
-        return len(self.unmapped_users)
+        with self._lock:
+            return len(self.unmapped_users)
 
     def get_unmapped_users_list(self) -> list:
         """Get a sorted list of unmapped user IDs."""
-        return sorted(self.unmapped_users)
+        with self._lock:
+            return sorted(self.unmapped_users)
 
 
 def log_unmapped_user_summary_for_dry_run(migrator) -> None:
@@ -397,7 +403,7 @@ def scan_channel_members_for_unmapped_users(migrator) -> None:
             try:
                 users_file = Path(migrator.export_root) / "users.json"
                 if users_file.exists():
-                    with open(users_file, "r") as f:
+                    with open(users_file, "r", encoding='utf-8') as f:
                         users_data = json.load(f)
                     user_lookup = {user["id"]: user for user in users_data}
             except Exception as e:
