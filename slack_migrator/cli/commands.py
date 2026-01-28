@@ -42,6 +42,7 @@ class MigrationOrchestrator:
             verbose=self.args.verbose,
             update_mode=self.args.update_mode,
             debug_api=self.args.debug_api,
+            external_space=self.args.external,
         )
 
         # Update config with CLI max_workers if provided
@@ -411,6 +412,11 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         type=int,
         help="Maximum number of concurrent worker threads for channel processing",
     )
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Create spaces as external spaces (allow external users to join)",
+    )
     return parser
 
 
@@ -426,6 +432,7 @@ def log_startup_info(args):
     log_with_context(logging.INFO, f"- Config: {config_path}")
     log_with_context(logging.INFO, f"- Dry run: {args.dry_run}")
     log_with_context(logging.INFO, f"- Update mode: {args.update_mode}")
+    log_with_context(logging.INFO, f"- External space: {args.external}")
     log_with_context(logging.INFO, f"- Verbose logging: {args.verbose}")
     log_with_context(logging.INFO, f"- Debug API calls: {args.debug_api}")
 

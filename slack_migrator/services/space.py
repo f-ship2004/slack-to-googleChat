@@ -131,24 +131,35 @@ def create_space(migrator, channel: str) -> str:
     if create_time:
         body["createTime"] = create_time
 
-    # Check if this channel has external users that need access
+    # Check if this channel has external users (needed for later tracking)
     has_external_users = channel_has_external_users(migrator, channel)
-    allow_external_access = migrator.config.get("allow_external_access", False)
 
-    if has_external_users:
-        if allow_external_access:
-            body["externalUserAllowed"] = True
-            log_with_context(
-                logging.INFO,
-                f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for channel {channel}",
-                channel=channel,
-            )
-        else:
-            log_with_context(
-                logging.WARNING,
-                f"Channel {channel} has external users but external access is disabled in config. External users will be skipped.",
-                channel=channel,
-            )
+    # Check if --external flag is set to create all spaces as external spaces
+    if getattr(migrator, "external_space", False):
+        body["externalUserAllowed"] = True
+        log_with_context(
+            logging.INFO,
+            f"{'[DRY RUN] ' if migrator.dry_run else ''}Creating space as external space (--external flag)",
+            channel=channel,
+        )
+    else:
+        # Check if this channel has external users that need access
+        allow_external_access = migrator.config.get("allow_external_access", False)
+
+        if has_external_users:
+            if allow_external_access:
+                body["externalUserAllowed"] = True
+                log_with_context(
+                    logging.INFO,
+                    f"{'[DRY RUN] ' if migrator.dry_run else ''}Enabling external user access for channel {channel}",
+                    channel=channel,
+                )
+            else:
+                log_with_context(
+                    logging.WARNING,
+                    f"Channel {channel} has external users but external access is disabled in config. External users will be skipped.",
+                    channel=channel,
+                )
 
     # Store space name (either real or generated)
     space_name = None
@@ -744,7 +755,8 @@ def add_regular_members(migrator, space: str, channel: str):
                 active_user_emails.append(internal_email)
 
     # If we have external users, ensure the space has externalUserAllowed=True
-    if has_external_users:
+    # Skip this check if --external flag was used (space is already external)
+    if has_external_users and not getattr(migrator, "external_space", False):
         allow_external_access = migrator.config.get("allow_external_access", False)
         if allow_external_access:
             log_with_context(

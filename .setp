@@ -11,3 +11,11 @@ venv/bin/python -m slack_migrator \
   --export_path slack_chanel_data \
   --workspace_admin igo.shin@f-ship.jp \
   --max-workers 2
+
+
+   venv/bin/python -m slack_migrator \                                                                     
+    --creds_path slack-to-gchat-migration-eefc572d7e9d.json \                                             
+    --export_path slack_chanel_data \                                                                     
+    --workspace_admin igo.shin@f-ship.jp \                                                                
+    --max-workers 2 \                                                                                     
+    --external   

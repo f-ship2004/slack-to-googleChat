@@ -51,6 +51,7 @@ class SlackToChatMigrator:
         verbose: bool = False,
         update_mode: bool = False,
         debug_api: bool = False,
+        external_space: bool = False,
     ):
         """Initialize the migrator with the required parameters."""
         self.creds_path = creds_path
@@ -61,6 +62,7 @@ class SlackToChatMigrator:
         self.verbose = verbose
         self.debug_api = debug_api
         self.update_mode = update_mode
+        self.external_space = external_space
         self.import_mode = (
             not update_mode
         )  # Set import_mode to True when not in update mode
